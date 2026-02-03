@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Callable, Any, overload, Sequence
+from typing import Callable, Any, overload, Iterator, Self
 
 from collections import OrderedDict
 from dataclasses import dataclass #, field
@@ -134,6 +134,7 @@ import time
 class Stage:
     func: Callable
     name: str = ""
+    is_enabled: bool = True
 
     def __post_init__(self) -> None:
         if self.name == "":
@@ -141,7 +142,6 @@ class Stage:
                 self.name = f"functools.partial({self.func.func.__name__})"
             else:
                 self.name = self.func.__name__
-        # self._sig = StageSignature(self.func)
         self._args: tuple = tuple()
         self._kwargs: dict[str, Any] = dict()
         self._out: Any = None
@@ -149,15 +149,17 @@ class Stage:
     def __call__(self, *args, **kwargs) -> Any:
         self._args = args
         self._kwargs = kwargs
-        # self._sig.validate_params(*args, ) #**kwargs)
-        self._out = self.func(*args, **kwargs)
-        return self._out
+        if self.is_enabled:
+            self._out = self.func(*args, **kwargs)
+            return self._out
+        return *args, kwargs
     
     def __repr__(self):
         return (
             f"{self.__class__.__name__}(" 
             f"name={self.name!r}, " 
-            f"func={self.func.__name__}"
+            f"func={self.func.__name__}, "
+            f"is_enabled={self.is_enabled}"
             ")"
         )
 
@@ -201,6 +203,19 @@ class Pipeline:
     def __len__(self) -> int:
         return len(self.stages)
 
+    def __getitem__(self, key: int | str) -> Stage:
+        self._validate_key(key)
+        if isinstance(key, int):
+            return self._dict[self.names[key]]
+        return self._dict[key]
+
+    def __iter__(self) -> Self:
+        self._iter_stages = iter(self.stages)
+        return self
+
+    def __next__(self) -> Stage:
+        return next(self._iter_stages)
+
     def _validate_key(self, key: int | str) -> None:
         if isinstance(key, int):
             if key >= len(self):
@@ -210,12 +225,6 @@ class Pipeline:
                 )
         elif key not in self._dict:
             raise KeyError(f"Cannot access stage {key}")
-
-    def __getitem__(self, key: int | str) -> Stage:
-        self._validate_key(key)
-        if isinstance(key, int):
-            return self._dict[self.names[key]]
-        return self._dict[key]
 
     def _run_stage(
         self, 
@@ -258,15 +267,27 @@ class Pipeline:
         self._run_inputs = []
         self._run_outputs = []
         self._stages_run = []
+
+        # no stage registrered
         if len(self) == 0:
             return None
 
-        next_args = self._run_stage(self.stages[0], 0, *args, **kwargs)
-        for idx, stage in enumerate(self.stages[1:], start=1):
+        # find first enabled stage
+        for idx in range(len(self)):
+            if self[idx].is_enabled:
+                break
+        else:
+            return None
+
+        # run stages
+        next_args = self._run_stage(self.stages[idx], 0, *args, **kwargs)
+        for idx, stage in enumerate(self.stages[idx+1:], start=idx+1):
             next_args = self._run_stage(stage, idx, *next_args)
 
         if len(next_args) == 1:
             return next_args[0]
+        elif len(next_args) == 0:
+            return None
         return next_args
 
     
@@ -279,14 +300,52 @@ class Pipeline:
         ...
 
     def get_stages_run(self, *keys):
+        """
+        Returns StageRun objects excluding disabled stages.
+        If not key is provided, returns all StageRun objects.
+        """
+        if len(keys) == 0:
+            keys = self.names
+
         data = []
         for key in keys:
             self._validate_key(key)
             if isinstance(key, str):
                 key = self.names.index(key)
-            data.append(self._stages_run[key])
+            run = self._stages_run[key]
+            if run.stage.is_enabled:
+                data.append(self._stages_run[key])
         return data
 
+    @overload
+    def enable(self, *keys: int) -> None:
+        ...
+
+    @overload
+    def enable(self, *keys: str) -> None:
+        ...
+
+    def enable(self, *keys):
+        """Enable specific stages"""
+        for k in keys:
+            self._validate_key(k)
+            self[k].is_enabled = True
+
+    @overload
+    def disable(self, *keys: int) -> None:
+        ...
+
+    @overload
+    def disable(self, *keys: str) -> None:
+        ...
+
+    def disable(self, *keys):
+        """Disable specific stages (or all stages if no key is specified)"""
+        if len(keys) == 0:
+            keys = range(0, len(self))
+        for k in keys:
+            self._validate_key(k)
+            self[k].is_enabled = False
 
 
 def make_pipeline(
