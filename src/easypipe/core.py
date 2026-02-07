@@ -241,7 +241,6 @@ class Pipeline:
     def enable(self, *keys):
         """Enable specific stages"""
         for k in keys:
-            # self._validate_key(k)
             self[k].is_enabled = True
 
     @overload
@@ -260,7 +259,6 @@ class Pipeline:
         if len(keys) == 0:
             keys = range(0, len(self))
         for k in keys:
-            # self._validate_key(k)
             self[k].is_enabled = False
 
     def __repr__(self) -> str:
