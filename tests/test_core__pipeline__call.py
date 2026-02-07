@@ -27,7 +27,7 @@ def func_divide_by_zero(a: float, b: float) -> float:
         ((func_sum, func_divide), (1, ), dict(), 2)
     ]
 )
-def test_run(
+def test_call(
     funcs: list[Callable],
     args: tuple[Any],
     kwargs: dict[str, Any],
@@ -85,6 +85,48 @@ def test_stop_at(
     assert p(*args, stop_at=stop_at, **kwargs) == expected
 
 
+@pytest.mark.parametrize(
+    ", ".join([
+        "funcs",
+        "stop_at",
+        "resume_from",
+        "args",
+        "kwargs",
+        "expected"
+    ]),
+    [
+        # resume from beginning
+        (
+            (func_sum, func_sum, func_sum), 
+            0,
+            0, 
+            (1,),
+            dict(), 
+            4
+        ),
+        # stop before the first stage (i.e., nothing is run)
+        (
+            (func_sum, func_sum, func_divide), 
+            1,
+            1,
+            (10, ), 
+            dict(), 
+            12,
+        ),
+    ]
+)
+def test_resume_from(
+    funcs: list[Callable],
+    stop_at: int,
+    resume_from: int,
+    args: tuple,
+    kwargs: dict,
+    expected: Any
+):
+    p = make_pipeline(*funcs)
+    p(*args, stop_at=stop_at, **kwargs)
+    assert p(*args, resume_from=resume_from, **kwargs) == expected
+
 
 @pytest.mark.parametrize(
     ", ".join([
@@ -102,7 +144,7 @@ def test_stop_at(
         )
     ]
 )
-def test_run_with_error(
+def test_call_with_error(
     funcs: Sequence[Callable],
     args: tuple[Any],
     kwargs: dict[str, Any],

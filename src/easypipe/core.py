@@ -1,12 +1,32 @@
 from __future__ import annotations
 
-from typing import Callable, Any, overload, Self, cast
+from typing import Callable, Any, Self, overload, cast
 
 from collections import OrderedDict, Counter, defaultdict
 from dataclasses import dataclass
 
 import functools
 import time
+
+
+def _validate_keys(p: Pipeline, *keys: int|str) -> None:
+    for k in keys:
+        if isinstance(k, int):
+            if (
+                k >= len(p)
+                or (k < 0 and k < -len(p)) 
+            ):
+                raise KeyError(f"Stage {k} not available")
+        elif k not in p._dict:
+            raise KeyError(f"Stage {k} not available")
+
+
+def validate_key(func: Callable) -> Any:
+    @functools.wraps(func)
+    def wrapper(p: Pipeline, *keys: int|str) -> Any:
+        _validate_keys(p, *keys)
+        return func(p, *keys)
+    return wrapper
 
 
 @dataclass
@@ -49,22 +69,6 @@ class StageRun:
     inputs: Any
     outputs: Any
     runtime: float
-
-
-def validate_key[*Ts](func: Callable[[Pipeline, *Ts], Any]) -> Any:
-    @functools.wraps(func)
-    def wrapper(p: Pipeline, *keys: *Ts) -> Any:
-        for k in keys:
-            if isinstance(k, int):
-                if (
-                    k >= len(p)
-                    or (k < 0 and k < -len(p)) 
-                ):
-                    raise KeyError(f"Stage {k} not available")
-            elif k not in p._dict:
-                raise KeyError(f"Stage {k} not available")
-        return func(p, *keys)
-    return wrapper
 
 
 class Pipeline:
@@ -165,35 +169,48 @@ class Pipeline:
         self, 
         *args, 
         stop_at: int | str | None = None,
-        # resume_from: int | str | None = None,
+        start_at: int | str | None = None,
+        resume_from: int | str | None = None,
         **kwargs
     ) -> Any:
-        self._run_inputs = []
-        self._run_outputs = []
-        self._stages_run = []
 
         # no stage registrered
         if len(self) == 0:
             return None
 
-        # find first enabled stage
-        for idx in range(len(self)):
-            if self[idx].is_enabled:
-                break
-        # ...and return None if no stage is enabled
+        first_stage_idx = 0
+        if resume_from is not None:
+            resume_from = cast(int, self._convert_key_to_int(resume_from))
+            if resume_from > 0:
+                prev_stage_run = self.get_stages_run(resume_from-1)[0]
+                args = prev_stage_run.outputs
+                kwargs = dict()
+                first_stage_idx = resume_from
         else:
-            return None
+            self._run_inputs = []
+            self._run_outputs = []
+            self._stages_run = []
+
+            # find first enabled stage
+            for idx in range(len(self)):
+                if self[idx].is_enabled:
+                    break
+            # ...and return None if no stage is enabled
+            else:
+                return None
+            first_stage_idx = idx
 
         if stop_at is not None:
             stop_at = cast(int, self._convert_key_to_int(stop_at))
-            if idx >= stop_at:
+            if first_stage_idx >= stop_at:
                 return None
         else:
             stop_at = len(self)
 
         # run stages
-        next_args = self._run_stage(self.stages[idx], 0, *args, **kwargs)
-        for idx, stage in enumerate(self.stages[idx+1:stop_at], start=idx+1):
+        _stages = self.stages[first_stage_idx:stop_at]
+        next_args = self._run_stage(_stages[0], first_stage_idx, *args, **kwargs)
+        for idx, stage in enumerate(_stages[1:], start=first_stage_idx+1):
             next_args = self._run_stage(stage, idx, *next_args)
 
         if len(next_args) == 1:
@@ -201,7 +218,6 @@ class Pipeline:
         elif len(next_args) == 0:
             return None
         return next_args
-
     
     @overload
     def get_stages_run(self, *keys: int) -> list[StageRun]:
@@ -217,14 +233,18 @@ class Pipeline:
         If not key is provided, returns all StageRun objects.
         """
         if len(keys) == 0:
-            keys = self.names
+            return self._stages_run
 
-        data = []
-        for key in keys:
-            key = self._convert_key_to_int(key)
-            run = self._stages_run[key]
-            if run.stage.is_enabled:
-                data.append(self._stages_run[key])
+        keys = {
+            self._convert_key_to_str(k)
+            for k in keys
+        }
+
+        data = [
+            run
+            for run in self._stages_run
+            if run.stage.name in keys
+        ]
         return data
 
     @overload
